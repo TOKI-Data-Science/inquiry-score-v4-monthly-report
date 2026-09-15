@@ -3,6 +3,9 @@ pydantic
 pydantic-settings
 python-dotenv
 sqlalchemy
-cx_Oracle
+oracledb
 loguru
 pandas
+numpy
+plotly
+scikit-learn

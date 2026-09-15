@@ -1,0 +1,25 @@
+name: Monthly report
+
+on:
+  schedule:
+    # 06:00 UTC on the 1st of every month
+    - cron: "0 6 1 * *"
+  workflow_dispatch: {}
+
+jobs:
+  run-report:
+    runs-on: [self-hosted, prod, container]
+    steps:
+      - name: Determine latest image tag
+        id: image
+        run: |
+          tag=$(docker images "${{ github.event.repository.name }}" --format '{{.Tag}}' | sort -V | tail -n1)
+          if [ -z "$tag" ]; then echo "No image found; push a version tag first." >&2; exit 1; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Run monthly report
+        run: |
+          docker run --rm \
+            --env-file="$HOME/envs/${{ github.event.repository.name }}.env" \
+            -v "$HOME/reports/inquiry-score-v4:/myapp/reports" \
+            "${{ github.event.repository.name }}:${{ steps.image.outputs.tag }}"
