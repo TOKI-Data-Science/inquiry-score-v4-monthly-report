@@ -62,17 +62,31 @@ Production follows the TOKI project-template pattern: git tags build a Docker im
 production server ([`.github/workflows/build-image.yml`](.github/workflows/build-image.yml)),
 and a scheduled workflow runs that image as a batch job
 ([`.github/workflows/schedule.yml`](.github/workflows/schedule.yml), `0 6 1 * *`, or trigger
-manually via "Run workflow"). Requires a self-hosted runner labeled `self-hosted, prod, container`
-and `$HOME/envs/inquiry-score-v4-monthly-report.env` on that server with the `ORACLE_*` /
-`REPORT_*` variables from `.env.template`.
+manually via "Run workflow"). Requires a self-hosted runner labeled `self-hosted, prod, container`.
+
+Oracle credentials are read from a GitHub **Environment** named `production`
+(Settings → Environments → New environment → `production`), not from a file on the server:
+
+| Secret name       | Value                          |
+| ------------------ | ------------------------------ |
+| `ORACLE_USERNAME`  | (Oracle username)               |
+| `ORACLE_PASSWORD`  | (Oracle password)               |
+| `ORACLE_HOSTNAME`  | (Oracle host/IP)                |
+| `ORACLE_PORT`      | `1521`                          |
+| `ORACLE_SERVICE`   | (Oracle service name)           |
+
+Optionally add required reviewers and restrict deployment branches on the `production`
+environment for an extra approval gate before the job runs.
 
 The scheduled workflow writes the HTML report to `$HOME/reports/inquiry-score-v4/` on the runner
 (persisted across runs) **and** uploads it as a GitHub Actions artifact named
 `inquiry-score-v4-report-<run id>` (kept for 90 days) — download it from the workflow run's
 Summary page under **Artifacts**, no server access needed.
 
-If GitHub Actions scheduling isn't available on the server, use a host crontab instead (this
-path only writes to the host directory; it does not create a workflow artifact):
+If GitHub Actions scheduling isn't available on the server, use a host crontab instead. This
+path reads from a local `.env` file (copy `.env.template` to
+`$HOME/envs/inquiry-score-v4-monthly-report.env` and fill in real values) and does not create a
+workflow artifact:
 
 ```cron
 0 6 1 * * docker run --rm --env-file=$HOME/envs/inquiry-score-v4-monthly-report.env -v $HOME/reports/inquiry-score-v4:/myapp/reports inquiry-score-v4-monthly-report:v0.1.0
