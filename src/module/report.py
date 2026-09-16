@@ -304,8 +304,10 @@ def vintage_grid(frame: pd.DataFrame, by: str) -> str:
 
 def vintage_section(frame: pd.DataFrame) -> str:
     """Dropdown-switchable vintage matrix: overall / one matrix per product / one matrix per model."""
+    overall_title = 'Overall \u00b7 event rate by bin \u00d7 base month'  # no backslashes inside f-string {} below (py<3.12)
+    overall_body = f'<div class="chart">{figure_html(vintage_heatmap(vintage_table(frame), overall_title))}</div>'
     views = (
-        ('overall', 'Overall', f'<div class="chart">{figure_html(vintage_heatmap(vintage_table(frame), "Overall \u00b7 event rate by bin \u00d7 base month"))}</div>'),
+        ('overall', 'Overall', overall_body),
         ('products', 'Products', vintage_grid(frame, 'product_type')),
         ('models', 'Models', vintage_grid(frame, 'model_type')),
     )
