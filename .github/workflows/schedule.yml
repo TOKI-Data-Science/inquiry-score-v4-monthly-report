@@ -17,9 +17,21 @@ jobs:
           if [ -z "$tag" ]; then echo "No image found; push a version tag first." >&2; exit 1; fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve report directory
+        id: paths
+        run: echo "reports_dir=$HOME/reports/inquiry-score-v4" >> "$GITHUB_OUTPUT"
+
       - name: Run monthly report
         run: |
           docker run --rm \
             --env-file="$HOME/envs/${{ github.event.repository.name }}.env" \
-            -v "$HOME/reports/inquiry-score-v4:/myapp/reports" \
+            -v "${{ steps.paths.outputs.reports_dir }}:/myapp/reports" \
             "${{ github.event.repository.name }}:${{ steps.image.outputs.tag }}"
+
+      - name: Upload report as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: inquiry-score-v4-report-${{ github.run_id }}
+          path: ${{ steps.paths.outputs.reports_dir }}/*.html
+          retention-days: 90
+          if-no-files-found: error

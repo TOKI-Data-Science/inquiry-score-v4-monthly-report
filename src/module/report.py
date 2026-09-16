@@ -34,7 +34,7 @@ PALETTE = [ACCENT, "#ebcf45", "#f25776", "#9a5cfe", '#ff8c5a', '#45c7e9', '#b39d
 BG, SURFACE, SURFACE2, LINE, TEXT, MUTED = '#050507', '#0c0d11', '#15161c', '#1f2029', '#f2f3f5', "#adb2bb"
 BAR = '#8ea1e1'
 HOVER_BG = '#0a0b0e'
-GOOD, WARN, BAD = '#57f287', '#fee75c', '#ed4245'
+GOOD, WARN, BAD = '#57f287', '#ff8c5a', '#ed4245'
 TICK = '#b7bcc6' 
 GRADE_INVERSION_THRESHOLD = 0.01 
 
@@ -71,14 +71,14 @@ def auc_or_nan(group: pd.DataFrame) -> float:
 def monthly_metrics(frame: pd.DataFrame, by: str | None = None) -> pd.DataFrame:
     keys = ['base_month'] if by is None else [by, 'base_month']
     grouped = frame.groupby(keys, dropna=False)
-    outcomes = grouped['event'].agg(customers='size', events='sum', event_rate='mean').reset_index()
+    outcomes = grouped['event'].agg(population='size', events='sum', event_rate='mean').reset_index()
     auc = grouped[['v4_score', 'event']].apply(auc_or_nan).rename('auc').reset_index()
     return outcomes.merge(auc, on=keys).sort_values(keys).reset_index(drop=True)
 
 
 def grade_metrics(frame: pd.DataFrame) -> pd.DataFrame:
-    grade = frame.groupby('v4_bin', dropna=False)['event'].agg(customers='size', events='sum', event_rate='mean').reset_index()
-    grade['share'] = grade['customers'] / grade['customers'].sum()
+    grade = frame.groupby('v4_bin', dropna=False)['event'].agg(population='size', events='sum', event_rate='mean').reset_index()
+    grade['share'] = grade['population'] / grade['population'].sum()
     grade['order'] = pd.to_numeric(grade['v4_bin'].str.extract(r'(-?\d+\.?\d*)')[0], errors='coerce')
     return grade.sort_values(['order', 'v4_bin'], na_position='last').drop(columns='order').reset_index(drop=True)
 
@@ -113,8 +113,8 @@ def segment_status(monthly: pd.DataFrame, by: str) -> pd.DataFrame:
         rows.append(
             {
                 by: name,
-                'customers': int(grp['customers'].sum()),
-                'event_rate': grp['events'].sum() / grp['customers'].sum(),
+                'population': int(grp['population'].sum()),
+                'event_rate': grp['events'].sum() / grp['population'].sum(),
                 'oot_auc': oot,
                 'avg_auc': grp['auc'].mean(),
                 'latest_month': month,
@@ -161,7 +161,7 @@ def trajectory_chart(monthly: pd.DataFrame, title: str, by: str | None = None) -
             mode='lines+markers+text',
             text=['' if pd.isna(v) else f'{v:.3f}' for v in y],
             textposition='top center',
-            textfont=dict(color=color if by else TEXT, size=11),
+            textfont=dict(color=TEXT, size=11),
             line=dict(color=color, width=2.5, shape='spline', smoothing=0.6),
             marker=dict(size=8, color=color, symbol=['diamond', *['circle'] * len(months)]),
             hovertemplate='%{x}<br>AUC %{y:.3f}<extra>' + html.escape(name) + '</extra>',
@@ -180,8 +180,8 @@ def grade_chart(grade: pd.DataFrame, title: str, color: str = ACCENT) -> go.Figu
     fig = go.Figure()
     fig.add_bar(
         x=bins, y=grade['share'], name='Population share', marker_color=BAR, marker_line_width=0, opacity=0.55,
-        customdata=grade['customers'],
-        hovertemplate='Bin %{x}<br>Share %{y:.1%} (%{customdata:,} customers)<extra></extra>',
+        customdata=grade['population'],
+        hovertemplate='Bin %{x}<br>Share %{y:.1%} (%{customdata:,} population)<extra></extra>',
     )
     fig.add_scatter(
         x=bins, y=grade['event_rate'], name='Event rate', yaxis='y2', mode='lines+markers+text',
@@ -215,6 +215,125 @@ def figure_html(fig: go.Figure) -> str:
         config={'displayModeBar': False, 'responsive': True},
     )
 
+
+def lighten(hex_color: str, amount: float = 0.45) -> str:
+    """Mix a hex color toward white so lines drawn on top of bars stay legible."""
+    r, g, b = (int(hex_color[i : i + 2], 16) for i in (1, 3, 5))
+    mix = lambda c: round(c + (255 - c) * amount)  # noqa: E731
+    return f'#{mix(r):02x}{mix(g):02x}{mix(b):02x}'
+
+
+def segment_rate_chart(monthly: pd.DataFrame, key: str, title: str) -> go.Figure:
+    """Population mix (100% stacked bars) and event rate (lines) per segment, by base_month."""
+    monthly = monthly.copy()
+    monthly['base_month'] = monthly['base_month'].astype(str)
+    monthly['share'] = monthly['population'] / monthly.groupby('base_month')['population'].transform('sum')
+    months = sorted(monthly['base_month'].unique())
+
+    fig = go.Figure()
+    for color, (name, grp) in zip(cycle(PALETTE), monthly.groupby(key)):
+        row = grp.set_index('base_month').reindex(months)
+        name = str(name)
+        fig.add_bar(
+            x=months, y=row['share'], name=name, legendgroup=name, marker_color=lighten(color), marker_line_width=0,
+            customdata=row['population'], hovertemplate=f'{html.escape(name)} · ' + '%{x}<br>Mix %{y:.1%} (%{customdata:,.0f} population)<extra></extra>',
+        )
+        fig.add_scatter(
+            x=months, y=row['event_rate'], name=name, legendgroup=name, showlegend=False, yaxis='y2',
+            mode='lines+markers', line=dict(color=color, width=3, shape='spline', smoothing=0.6),
+            marker=dict(size=8, color=color, line=dict(color=SURFACE, width=1.5)),
+            hovertemplate=f'{html.escape(name)} · ' + '%{x}<br>Event rate %{y:.2%}<extra></extra>',
+        )
+    base_layout(fig, title, height=360)
+    fig.update_layout(
+        barmode='stack',
+        bargap=0.3,
+        legend=dict(groupclick='togglegroup'),
+        xaxis=dict(type='category', categoryorder='array', categoryarray=months, title=dict(text='Base month', font=dict(size=11))),
+        yaxis=dict(title=dict(text='Population mix', font=dict(size=11)), tickformat='.0%', range=[0, 1]),
+        yaxis2=dict(title=dict(text='Event rate', font=dict(size=11)), overlaying='y', side='right', tickformat='.0%', rangemode='tozero', showgrid=False, fixedrange=True, tickfont=dict(size=11, color=TICK)),
+    )
+    return fig
+
+
+def vintage_table(frame: pd.DataFrame, by: str | None = None) -> pd.DataFrame:
+    """Event rate pivot: rows = v4_bin (ascending, optionally prefixed by segment), columns = base_month."""
+    keys = ['v4_bin', 'base_month'] if by is None else [by, 'v4_bin', 'base_month']
+    grouped = frame.groupby(keys)['event'].mean().reset_index()
+    grouped['bin_order'] = pd.to_numeric(grouped['v4_bin'], errors='coerce')
+    if by is None:
+        grouped['row'] = grouped['v4_bin']
+        sort_cols = ['bin_order', 'v4_bin']
+    else:
+        grouped['row'] = grouped[by].astype(str) + ' · bin ' + grouped['v4_bin'].astype(str)
+        sort_cols = [by, 'bin_order', 'v4_bin']
+    rows_sorted = grouped.sort_values(sort_cols).drop_duplicates('row')['row'].tolist()
+    months_sorted = sorted(grouped['base_month'].unique())
+    return grouped.pivot(index='row', columns='base_month', values='event').reindex(index=rows_sorted, columns=months_sorted)
+
+
+def vintage_heatmap(table: pd.DataFrame, title: str, row_title: str = 'v4_bin') -> go.Figure:
+    x = [str(c) for c in table.columns]
+    y = table.index.tolist()
+    z = table.to_numpy()
+    text = [['' if pd.isna(v) else f'{v:.1%}' for v in row] for row in z]
+    fig = go.Figure(
+        go.Heatmap(
+            z=z, x=x, y=y, text=text, texttemplate='%{text}', textfont=dict(size=11, color=TEXT),
+            colorscale=[[0, SURFACE2], [0.5, WARN], [1, BAD]], zmin=0,
+            colorbar=dict(title=dict(text='Event rate', font=dict(size=11, color=TICK)), tickformat='.0%', tickfont=dict(size=10, color=TICK), outlinewidth=0),
+            hovertemplate='%{y} · %{x}<br>Event rate %{z:.2%}<extra></extra>', xgap=3, ygap=3,
+        )
+    )
+    base_layout(fig, title, height=max(340, 26 * len(y) + 120))
+    fig.update_layout(
+        xaxis=dict(type='category', title=dict(text='Base month', font=dict(size=11))),
+        yaxis=dict(type='category', title=dict(text=row_title, font=dict(size=11)), autorange='reversed'),
+    )
+    return fig
+
+
+def vintage_grid(frame: pd.DataFrame, by: str) -> str:
+    """One small bin x month heatmap per segment value (product/model name)."""
+    cards = [
+        f'<div class="chart">{figure_html(vintage_heatmap(vintage_table(grp), f"{html.escape(str(name))} · n={len(grp):,}"))}</div>'
+        for name, grp in frame.groupby(by)
+    ]
+    return f'<div class="grid">{"".join(cards)}</div>'
+
+
+def vintage_section(frame: pd.DataFrame) -> str:
+    """Dropdown-switchable vintage matrix: overall / one matrix per product / one matrix per model."""
+    views = (
+        ('overall', 'Overall', f'<div class="chart">{figure_html(vintage_heatmap(vintage_table(frame), "Overall \u00b7 event rate by bin \u00d7 base month"))}</div>'),
+        ('products', 'Products', vintage_grid(frame, 'product_type')),
+        ('models', 'Models', vintage_grid(frame, 'model_type')),
+    )
+    options = ''.join(f'<option value="{key}">{label}</option>' for key, label, _ in views)
+    panels = ''.join(
+        f'<div id="vintage-{key}" style="{"" if i == 0 else "display:none"}">{body}</div>'
+        for i, (key, _, body) in enumerate(views)
+    )
+    keys_js = ','.join(f"'{key}'" for key, _, _ in views)
+    return f"""<div class="vintage-picker">
+  <label for="vintage-select">View</label>
+  <select id="vintage-select">{options}</select>
+</div>
+{panels}
+<script>
+(function () {{
+  var keys = [{keys_js}];
+  document.getElementById('vintage-select').addEventListener('change', function (e) {{
+    keys.forEach(function (k) {{
+      var el = document.getElementById('vintage-' + k);
+      var active = k === e.target.value;
+      el.style.display = active ? '' : 'none';
+      if (active) el.querySelectorAll('.plotly-graph-div').forEach(function (g) {{ Plotly.Plots.resize(g); }});
+    }});
+  }});
+}})();
+</script>"""
+
 def fmt(col: str, value) -> str:
     if isinstance(value, tuple):  # (level, title) status
         level, title = value
@@ -227,7 +346,7 @@ def fmt(col: str, value) -> str:
         return f'<span class="{"neg" if value < 0 else "pos"}">{value:+.3f}</span>'
     if col.endswith('auc'):
         return f'{value:.3f}'
-    if col in ('customers', 'events', 'base_month'):
+    if col in ('population', 'events', 'base_month'):
         return f'{int(value):,}' if col != 'base_month' else str(int(value))
     return html.escape(str(value))
 
@@ -249,7 +368,7 @@ def grade_grid(frame: pd.DataFrame, by: str) -> str:
 STATUS_LABELS = {
     'product_type': 'Product',
     'model_type': 'Model',
-    'customers': 'Customers',
+    'population': 'Population',
     'event_rate': 'Event rate',
     'oot_auc': 'OOT-valid AUC',
     'avg_auc': 'Avg monthly AUC',
@@ -260,7 +379,7 @@ STATUS_LABELS = {
 }
 MONTHLY_LABELS = {
     'base_month': 'Base month',
-    'customers': 'Customers',
+    'population': 'Population',
     'events': 'Events',
     'event_rate': 'Event rate',
     'auc': 'AUC',
@@ -282,6 +401,9 @@ h3{{font-size:13px;color:#c7cad1;margin:18px 0 8px;font-weight:600}}
 .kpi,.chart,.action,.tablewrap{{background:var(--surface);border:1px solid var(--line);border-radius:8px}}
 .kpi{{padding:18px 20px}} .label{{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}} .value{{font-size:28px;font-weight:700;margin-top:4px;letter-spacing:-.01em}} .value small{{font-size:12px;color:var(--muted);font-weight:500;margin-left:6px}}
 .chart{{padding:6px;min-width:0;overflow:hidden}} .chart .plotly-graph-div{{width:100%!important}} .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(460px,100%),1fr));gap:12px}}
+.vintage-picker{{display:flex;align-items:center;gap:10px;margin:18px 0 8px}}
+.vintage-picker label{{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}}
+.vintage-picker select{{background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:13px}}
 .action{{padding:22px;border-left:3px solid var(--accent);display:grid;grid-template-columns:1fr auto;gap:20px;align-items:center;margin-bottom:12px}}
 .action.critical{{border-left-color:var(--bad)}} .action.warning{{border-left-color:var(--warn)}} .action.healthy{{border-left-color:var(--good)}}
 .action h3{{margin:0 0 5px;font-size:19px;color:var(--text);font-weight:700}} .action p{{margin:0;color:var(--muted);font-size:13px}}
@@ -339,7 +461,7 @@ def render_report(frame: pd.DataFrame, report_month: str) -> str:
 <main>
 <section id="overview"><h2>Overview</h2>
 <div class="kpis">
-  <div class="kpi"><div class="label">Customers</div><div class="value">{len(frame):,}</div></div>
+  <div class="kpi"><div class="label">Population</div><div class="value">{len(frame):,}</div></div>
   <div class="kpi"><div class="label">Event rate</div><div class="value">{frame['event'].mean():.2%}</div></div>
   <div class="kpi"><div class="label">Overall AUC</div><div class="value">{overall_auc:.3f}<small>OOT {OOT_AUC['overall']:.3f}</small></div></div>
   <div class="kpi"><div class="label">Latest month AUC</div><div class="value">{latest_text}<small>{html.escape(latest_month)}</small></div></div>
@@ -354,12 +476,14 @@ def render_report(frame: pd.DataFrame, report_month: str) -> str:
 </section>
 
 <section id="product"><h2>Monthly performance · by product</h2>
-<div class="chart">{figure_html(trajectory_chart(product_monthly, 'AUC by product_type', 'product_type'))}</div>
+<div class="chart">{figure_html(trajectory_chart(product_monthly, 'AUC trajectory by product', 'product_type'))}</div>
+<div class="chart">{figure_html(segment_rate_chart(product_monthly, 'product_type', 'Population mix & event rate by product'))}</div>
 <div class="tablewrap">{table_html(product_status, STATUS_LABELS)}</div>
 </section>
 
 <section id="model"><h2>Monthly performance · by model</h2>
-<div class="chart">{figure_html(trajectory_chart(model_monthly, 'AUC by model_type', 'model_type'))}</div>
+<div class="chart">{figure_html(trajectory_chart(model_monthly, 'AUC trajectory by model', 'model_type'))}</div>
+<div class="chart">{figure_html(segment_rate_chart(model_monthly, 'model_type', 'Population mix & event rate by model'))}</div>
 <div class="tablewrap">{table_html(model_status, STATUS_LABELS)}</div>
 </section>
 
@@ -367,6 +491,8 @@ def render_report(frame: pd.DataFrame, report_month: str) -> str:
 <div class="chart">{figure_html(grade_chart(grade_metrics(frame), 'Overall'))}</div>
 <h3>By product</h3>{grade_grid(frame, 'product_type')}
 <h3>By model</h3>{grade_grid(frame, 'model_type')}
+<h3>Vintage matrix</h3>
+{vintage_section(frame)}
 </section>
 
 <section id="action"><h2>Needed action</h2>

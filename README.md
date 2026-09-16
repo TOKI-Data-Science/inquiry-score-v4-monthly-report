@@ -66,7 +66,13 @@ manually via "Run workflow"). Requires a self-hosted runner labeled `self-hosted
 and `$HOME/envs/inquiry-score-v4-monthly-report.env` on that server with the `ORACLE_*` /
 `REPORT_*` variables from `.env.template`.
 
-If GitHub Actions scheduling isn't available on the server, use a host crontab instead:
+The scheduled workflow writes the HTML report to `$HOME/reports/inquiry-score-v4/` on the runner
+(persisted across runs) **and** uploads it as a GitHub Actions artifact named
+`inquiry-score-v4-report-<run id>` (kept for 90 days) — download it from the workflow run's
+Summary page under **Artifacts**, no server access needed.
+
+If GitHub Actions scheduling isn't available on the server, use a host crontab instead (this
+path only writes to the host directory; it does not create a workflow artifact):
 
 ```cron
 0 6 1 * * docker run --rm --env-file=$HOME/envs/inquiry-score-v4-monthly-report.env -v $HOME/reports/inquiry-score-v4:/myapp/reports inquiry-score-v4-monthly-report:v0.1.0
