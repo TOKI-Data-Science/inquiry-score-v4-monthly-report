@@ -29,14 +29,30 @@ WARNING_DROP = 0.05
 CRITICAL_DROP = 0.10
 REQUIRED_COLUMNS = {'id', 'product_type', 'model_type', 'v4_score', 'v4_bin', 'base_month', 'event'}
 
-ACCENT = '#7289da'
-PALETTE = [ACCENT, "#ebcf45", "#f25776", "#9a5cfe", '#ff8c5a', '#45c7e9', '#b39dfb', '#ed4245']
-BG, SURFACE, SURFACE2, LINE, TEXT, MUTED = '#050507', '#0c0d11', '#15161c', '#1f2029', '#f2f3f5', "#adb2bb"
-BAR = '#8ea1e1'
-HOVER_BG = '#0a0b0e'
-GOOD, WARN, BAD = '#57f287', '#ff8c5a', '#ed4245'
-TICK = '#b7bcc6' 
-GRADE_INVERSION_THRESHOLD = 0.01 
+# Harbor Blue color book, dark mode (HTML only): primary becomes Tint 400 so it stays readable.
+ACCENT = '#7FA8EC'  # Tint 400
+TINT_200, TINT_50, DEEP = '#CFE0FA', '#F2F7FE', '#0D2A4A'
+PALETTE = ['#2E6BD6', '#7FA8EC', '#2BA3A0', '#E59AB4', '#9C8FE0', '#8A94A6']  # Chart 1-6, assigned in order
+BG, SURFACE, SURFACE2, LINE, TEXT, MUTED = '#10151F', '#18202D', '#1F2938', '#2A3445', '#E8EEF7', '#9BA8BD'
+HOVER_BG = SURFACE2
+GOOD, WARN, BAD = '#3A9E6E', '#E0A33A', '#D9604C'
+GOOD_BG, WARN_BG, BAD_BG = '#E2F2E9', '#FBF0DA', '#FAE4E0'
+TICK = MUTED
+# Segment colors from the color book: bnpl = deepest visible blue, credit = amber, leasing = soft blue.
+SEGMENT_COLORS = {
+    'bnpl': '#2E6BD6', 'credit': '#E0A33A', 'leasing': '#7FA8EC',
+    # models: clearly different hues, still from the book (amber/rose = credit side, blue/teal = lease side)
+    'ndsh_credit': '#E0A33A', 'no_ndsh_credit': '#E59AB4',
+    'ndsh_lease': '#7FA8EC', 'no_ndsh_lease': '#2BA3A0',
+}
+
+
+def segment_colors(names, fallback=PALETTE):
+    """Fixed color per segment name; unknown names take unused chart colors in order."""
+    spare = cycle([c for c in fallback if c not in SEGMENT_COLORS.values()] or fallback)
+    return [SEGMENT_COLORS.get(str(n)) or next(spare) for n in names]
+GRADE_INVERSION_THRESHOLD = 0.01
+FONT = 'Segoe UI, Arial, sans-serif'
 
 def prepare_data(frame: pd.DataFrame) -> pd.DataFrame:
     frame = frame.copy()
@@ -125,22 +141,26 @@ def segment_status(monthly: pd.DataFrame, by: str) -> pd.DataFrame:
         )
     return pd.DataFrame(rows)
 
-def base_layout(fig: go.Figure, title: str, height: int = 380) -> None:
+AXIS_TITLE = dict(size=13, color=TICK)
+
+
+def base_layout(fig: go.Figure, height: int = 320) -> None:
+    """Shared chart style. No title inside the figure: the section heading is the title."""
     fig.update_layout(
-        title=dict(text=f'<b>{title}</b>', font=dict(size=15, color=TEXT), x=0.02, y=0.96),
+        title=None,
         height=height,
         paper_bgcolor=SURFACE,
         plot_bgcolor=SURFACE,
-        font=dict(family='Segoe UI, sans-serif', color=TICK, size=12),
-        margin=dict(l=48, r=48, t=60, b=44),
-        hoverlabel=dict(bgcolor=HOVER_BG, font_color=TEXT, bordercolor=LINE, font_size=12),
-        legend=dict(orientation='h', y=1.12, x=1, xanchor='right', bgcolor='rgba(0,0,0,0)', font=dict(size=12, color=TICK)),
-        xaxis=dict(showgrid=False, zeroline=False, fixedrange=True, showline=True, linecolor=LINE, tickfont=dict(size=11, color=TICK)),
-        yaxis=dict(showgrid=False, zeroline=False, fixedrange=True, tickfont=dict(size=11, color=TICK)),
+        font=dict(family=FONT, color=TICK, size=13),
+        margin=dict(l=52, r=52, t=36, b=44),
+        hoverlabel=dict(bgcolor=HOVER_BG, font_color=TEXT, bordercolor=LINE, font_size=13),
+        legend=dict(orientation='h', y=1.02, yanchor='bottom', x=1, xanchor='right', bgcolor='rgba(0,0,0,0)', font=dict(size=11, color=TICK), itemwidth=30, tracegroupgap=0),
+        xaxis=dict(showgrid=False, zeroline=False, fixedrange=True, showline=True, linecolor=LINE, tickfont=dict(size=12, color=TICK)),
+        yaxis=dict(showgrid=False, zeroline=False, fixedrange=True, tickfont=dict(size=12, color=TICK)),
     )
 
 
-def trajectory_chart(monthly: pd.DataFrame, title: str, by: str | None = None) -> go.Figure:
+def trajectory_chart(monthly: pd.DataFrame, by: str | None = None) -> go.Figure:
     months = sorted(monthly['base_month'].astype(str).unique())
     categories = ['OOT-valid', *months]
     if by is None:
@@ -150,7 +170,8 @@ def trajectory_chart(monthly: pd.DataFrame, title: str, by: str | None = None) -
 
     fig = go.Figure()
     all_values = []
-    for color, (name, grp, oot) in zip(cycle(PALETTE), series):
+    colors = [PALETTE[0]] if by is None else segment_colors([n for n, _, _ in series])
+    for color, (name, grp, oot) in zip(colors, series):
         by_month = grp.set_index(grp['base_month'].astype(str))['auc'].reindex(months)
         y = [oot, *by_month.tolist()]
         all_values.extend(v for v in y if pd.notna(v))
@@ -158,34 +179,30 @@ def trajectory_chart(monthly: pd.DataFrame, title: str, by: str | None = None) -
             x=categories,
             y=y,
             name=name,
-            mode='lines+markers+text',
-            text=['' if pd.isna(v) else f'{v:.3f}' for v in y],
-            textposition='top center',
-            textfont=dict(color=TEXT, size=11),
+            mode='lines+markers',
             line=dict(color=color, width=2.5, shape='spline', smoothing=0.6),
             marker=dict(size=8, color=color, symbol=['diamond', *['circle'] * len(months)]),
             hovertemplate='%{x}<br>AUC %{y:.3f}<extra>' + html.escape(name) + '</extra>',
         )
     fig.add_vrect(x0=-0.5, x1=0.5, fillcolor=ACCENT, opacity=0.08, line_width=0)
     lo, hi = (min(all_values), max(all_values)) if all_values else (0.5, 0.8)
-    base_layout(fig, title)
+    base_layout(fig)
     fig.update_layout(showlegend=by is not None)
     fig.update_xaxes(type='category', categoryorder='array', categoryarray=categories)
-    fig.update_yaxes(range=[lo - 0.03, hi + 0.03], tickformat='.2f')
+    fig.update_yaxes(range=[lo - 0.03, hi + 0.04], tickformat='.2f')
     return fig
 
 
-def grade_chart(grade: pd.DataFrame, title: str, color: str = ACCENT) -> go.Figure:
+def grade_chart(grade: pd.DataFrame, color: str = PALETTE[0]) -> go.Figure:
     bins = grade['v4_bin'].tolist()
     fig = go.Figure()
     fig.add_bar(
-        x=bins, y=grade['share'], name='Population share', marker_color=BAR, marker_line_width=0, opacity=0.55,
+        x=bins, y=grade['share'], name='Population share', marker_color=TINT_200, marker_line_width=0, opacity=0.35,
         customdata=grade['population'],
         hovertemplate='Bin %{x}<br>Share %{y:.1%} (%{customdata:,} population)<extra></extra>',
     )
     fig.add_scatter(
-        x=bins, y=grade['event_rate'], name='Event rate', yaxis='y2', mode='lines+markers+text',
-        text=[f'{v:.1%}' for v in grade['event_rate']], textposition='top center', textfont=dict(size=11, color=TEXT),
+        x=bins, y=grade['event_rate'], name='Event rate', yaxis='y2', mode='lines+markers',
         line=dict(color=color, width=2.5, shape='spline', smoothing=0.6), marker=dict(size=7, color=color),
         hovertemplate='Bin %{x}<br>Event rate %{y:.2%}<extra></extra>',
     )
@@ -198,12 +215,14 @@ def grade_chart(grade: pd.DataFrame, title: str, color: str = ACCENT) -> go.Figu
             hovertemplate='Bin %{x}: rate inversion (drops >%{customdata:.0%} into next bin)<extra></extra>',
             customdata=[GRADE_INVERSION_THRESHOLD] * len(inverted_bins), showlegend=False,
         )
-    base_layout(fig, title, height=340)
+    base_layout(fig)
+    max_share = float(grade['share'].max()) if len(grade) else 1.0
+    max_rate = float(grade['event_rate'].max()) if len(grade) else 1.0
     fig.update_layout(
         xaxis=dict(type='category', categoryorder='array', categoryarray=bins),
-        yaxis=dict(title=dict(text='Population share', font=dict(size=11)), tickformat='.0%', rangemode='tozero'),
-        yaxis2=dict(title=dict(text='Event rate', font=dict(size=11)), overlaying='y', side='right', tickformat='.0%', rangemode='tozero', showgrid=False, fixedrange=True, tickfont=dict(size=11, color=TICK)),
-        bargap=0.35,
+        yaxis=dict(title=dict(text='Population share', font=AXIS_TITLE), tickformat='.0%', range=[0, max_share * 1.15]),
+        yaxis2=dict(title=dict(text='Event rate', font=AXIS_TITLE), overlaying='y', side='right', tickformat='.0%', range=[0, max_rate * 1.15], showgrid=False, fixedrange=True, tickfont=dict(size=12, color=TICK)),
+        bargap=0.5,
     )
     return fig
 
@@ -216,14 +235,7 @@ def figure_html(fig: go.Figure) -> str:
     )
 
 
-def lighten(hex_color: str, amount: float = 0.45) -> str:
-    """Mix a hex color toward white so lines drawn on top of bars stay legible."""
-    r, g, b = (int(hex_color[i : i + 2], 16) for i in (1, 3, 5))
-    mix = lambda c: round(c + (255 - c) * amount)  # noqa: E731
-    return f'#{mix(r):02x}{mix(g):02x}{mix(b):02x}'
-
-
-def segment_rate_chart(monthly: pd.DataFrame, key: str, title: str) -> go.Figure:
+def segment_rate_chart(monthly: pd.DataFrame, key: str) -> go.Figure:
     """Population mix (100% stacked bars) and event rate (lines) per segment, by base_month."""
     monthly = monthly.copy()
     monthly['base_month'] = monthly['base_month'].astype(str)
@@ -231,11 +243,12 @@ def segment_rate_chart(monthly: pd.DataFrame, key: str, title: str) -> go.Figure
     months = sorted(monthly['base_month'].unique())
 
     fig = go.Figure()
-    for color, (name, grp) in zip(cycle(PALETTE), monthly.groupby(key)):
+    groups = list(monthly.groupby(key))
+    for color, (name, grp) in zip(segment_colors([g[0] for g in groups]), groups):
         row = grp.set_index('base_month').reindex(months)
         name = str(name)
         fig.add_bar(
-            x=months, y=row['share'], name=name, legendgroup=name, marker_color=lighten(color), marker_line_width=0,
+            x=months, y=row['share'], name=name, legendgroup=name, marker_color=color, marker_line_width=0, opacity=0.4,
             customdata=row['population'], hovertemplate=f'{html.escape(name)} · ' + '%{x}<br>Mix %{y:.1%} (%{customdata:,.0f} population)<extra></extra>',
         )
         fig.add_scatter(
@@ -244,14 +257,15 @@ def segment_rate_chart(monthly: pd.DataFrame, key: str, title: str) -> go.Figure
             marker=dict(size=8, color=color, line=dict(color=SURFACE, width=1.5)),
             hovertemplate=f'{html.escape(name)} · ' + '%{x}<br>Event rate %{y:.2%}<extra></extra>',
         )
-    base_layout(fig, title, height=360)
+    max_rate = float(monthly['event_rate'].max()) if len(monthly) else 1.0
+    base_layout(fig)
     fig.update_layout(
         barmode='stack',
-        bargap=0.3,
+        bargap=0.5,
         legend=dict(groupclick='togglegroup'),
-        xaxis=dict(type='category', categoryorder='array', categoryarray=months, title=dict(text='Base month', font=dict(size=11))),
-        yaxis=dict(title=dict(text='Population mix', font=dict(size=11)), tickformat='.0%', range=[0, 1]),
-        yaxis2=dict(title=dict(text='Event rate', font=dict(size=11)), overlaying='y', side='right', tickformat='.0%', rangemode='tozero', showgrid=False, fixedrange=True, tickfont=dict(size=11, color=TICK)),
+        xaxis=dict(type='category', categoryorder='array', categoryarray=months, title=dict(text='Base month', font=AXIS_TITLE)),
+        yaxis=dict(title=dict(text='Population mix', font=AXIS_TITLE), tickformat='.0%', range=[0, 1]),
+        yaxis2=dict(title=dict(text='Event rate', font=AXIS_TITLE), overlaying='y', side='right', tickformat='.0%', range=[0, max_rate * 1.15], showgrid=False, fixedrange=True, tickfont=dict(size=12, color=TICK)),
     )
     return fig
 
@@ -272,40 +286,61 @@ def vintage_table(frame: pd.DataFrame, by: str | None = None) -> pd.DataFrame:
     return grouped.pivot(index='row', columns='base_month', values='event').reindex(index=rows_sorted, columns=months_sorted)
 
 
-def vintage_heatmap(table: pd.DataFrame, title: str, row_title: str = 'v4_bin') -> go.Figure:
+def vintage_heatmap(table: pd.DataFrame, row_title: str = 'Score bin') -> go.Figure:
     x = [str(c) for c in table.columns]
     y = table.index.tolist()
     z = table.to_numpy()
     text = [['' if pd.isna(v) else f'{v:.1%}' for v in row] for row in z]
     fig = go.Figure(
         go.Heatmap(
-            z=z, x=x, y=y, text=text, texttemplate='%{text}', textfont=dict(size=11, color=TEXT),
-            colorscale=[[0, SURFACE2], [0.5, WARN], [1, BAD]], zmin=0,
-            colorbar=dict(title=dict(text='Event rate', font=dict(size=11, color=TICK)), tickformat='.0%', tickfont=dict(size=10, color=TICK), outlinewidth=0),
+            z=z, x=x, y=y, text=text, texttemplate='%{text}', textfont=dict(size=12, color=TEXT),
+            # red ramp (low -> high event rate): dark surface -> deep red -> Bad
+            colorscale=[[0, SURFACE2], [0.5, '#7A3A38'], [1, BAD]], zmin=0,
+            colorbar=dict(title=dict(text='Event rate', font=dict(size=13, color=TICK)), tickformat='.0%', tickfont=dict(size=12, color=TICK), outlinewidth=0),
             hovertemplate='%{y} · %{x}<br>Event rate %{z:.2%}<extra></extra>', xgap=3, ygap=3,
         )
     )
-    base_layout(fig, title, height=max(340, 26 * len(y) + 120))
+    base_layout(fig, height=max(320, 26 * len(y) + 120))
     fig.update_layout(
-        xaxis=dict(type='category', title=dict(text='Base month', font=dict(size=11))),
-        yaxis=dict(type='category', title=dict(text=row_title, font=dict(size=11)), autorange='reversed'),
+        xaxis=dict(type='category', title=dict(text='Base month', font=AXIS_TITLE)),
+        yaxis=dict(type='category', title=dict(text=row_title, font=AXIS_TITLE), autorange='reversed'),
     )
     return fig
+
+
+def html_legend(fig: go.Figure) -> str:
+    """Single-row legend rendered in HTML (Plotly wraps long names onto a second row); hides the Plotly one."""
+    items = {}
+    for tr in fig.data:
+        if tr.name and tr.showlegend is not False and tr.name not in items:
+            items[tr.name] = tr.marker.color
+    fig.update_layout(showlegend=False, margin=dict(t=12))
+    chips = ''.join(f'<span><i style="background:{c}"></i>{html.escape(n)}</span>' for n, c in items.items())
+    return f'<div class="legend">{chips}</div>'
+
+
+def chart_card(heading: str, fig: go.Figure, legend: bool = False) -> str:
+    """A chart with its plain-language heading (the figure itself carries no title)."""
+    key = html_legend(fig) if legend else ''
+    return f'<div class="chart"><h3>{html.escape(heading)}</h3>{key}{figure_html(fig)}</div>'
+
+
+def pair(*cards: str) -> str:
+    return f'<div class="grid">{"".join(cards)}</div>'
 
 
 def vintage_grid(frame: pd.DataFrame, by: str) -> str:
     """One small bin x month heatmap per segment value (product/model name)."""
     cards = [
-        f'<div class="chart">{figure_html(vintage_heatmap(vintage_table(grp), f"{html.escape(str(name))} · n={len(grp):,}"))}</div>'
+        chart_card(f'{name} · n={len(grp):,}', vintage_heatmap(vintage_table(grp)))
         for name, grp in frame.groupby(by)
     ]
-    return f'<div class="grid">{"".join(cards)}</div>'
+    return pair(*cards)
 
 
 def vintage_section(frame: pd.DataFrame) -> str:
     """Dropdown-switchable vintage matrix: overall / one matrix per product / one matrix per model."""
-    overall_title = 'Overall \u00b7 event rate by bin \u00d7 base month'  # no backslashes inside f-string {} below (py<3.12)
-    overall_body = f'<div class="chart">{figure_html(vintage_heatmap(vintage_table(frame), overall_title))}</div>'
+    overall_body = chart_card('Overall: how the event rate changes by score bin and base month', vintage_heatmap(vintage_table(frame)))
     views = (
         ('overall', 'Overall', overall_body),
         ('products', 'Products', vintage_grid(frame, 'product_type')),
@@ -361,10 +396,11 @@ def table_html(frame: pd.DataFrame, labels: dict[str, str]) -> str:
 
 
 def grade_grid(frame: pd.DataFrame, by: str) -> str:
-    cards = []
-    for color, (name, grp) in zip(cycle(PALETTE), frame.groupby(by)):
-        cards.append(f'<div class="chart">{figure_html(grade_chart(grade_metrics(grp), f"{html.escape(str(name))} · n={len(grp):,}", color))}</div>')
-    return f'<div class="grid">{"".join(cards)}</div>'
+    cards = [
+        chart_card(f'{name} · n={len(grp):,}', grade_chart(grade_metrics(grp), color))
+        for color, (name, grp) in zip(segment_colors(sorted(frame[by].unique())), frame.groupby(by))
+    ]
+    return pair(*cards)
 
 
 STATUS_LABELS = {
@@ -389,37 +425,39 @@ MONTHLY_LABELS = {
 }
 
 CSS = f"""
-:root{{--bg:{BG};--surface:{SURFACE};--surface2:{SURFACE2};--line:{LINE};--text:{TEXT};--muted:{MUTED};--accent:{ACCENT};--good:{GOOD};--warn:{WARN};--bad:{BAD}}}
+:root{{--bg:{BG};--surface:{SURFACE};--surface2:{SURFACE2};--line:{LINE};--text:{TEXT};--muted:{MUTED};--accent:{ACCENT};--good:{GOOD};--warn:{WARN};--bad:{BAD};color-scheme:dark}}
 *{{box-sizing:border-box}} html{{scroll-behavior:smooth;scroll-padding-top:80px}}
-body{{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 "Segoe UI",system-ui,sans-serif}}
-nav{{position:sticky;top:0;z-index:10;height:64px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:20px;padding:0 max(24px,calc((100% - 1200px)/2));background:rgba(5,5,7,.94);backdrop-filter:blur(8px)}}
-.brand{{font-size:16px;font-weight:650;white-space:nowrap}} .brand span{{color:var(--accent)}}
+body{{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 {FONT}}}
+nav{{position:sticky;top:0;z-index:10;height:64px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:20px;padding:0 max(24px,calc((100% - 1120px)/2));background:var(--surface)}}
+.brand{{font-size:16px;font-weight:600;white-space:nowrap}} .brand span{{color:var(--accent)}}
 .links{{display:flex;gap:4px;flex-wrap:wrap}} .links a{{color:var(--muted);text-decoration:none;font-size:12px;text-transform:uppercase;letter-spacing:.04em;padding:6px 10px;border-radius:4px}}
 .links a:hover{{color:var(--text);background:var(--surface2)}} .runtime{{color:var(--muted);font-size:12px;text-align:right;white-space:nowrap}}
-main{{max-width:1200px;margin:auto;padding:34px 24px 50px}} section{{margin-bottom:34px}}
-h2{{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 12px;font-weight:700}}
-h3{{font-size:13px;color:#c7cad1;margin:18px 0 8px;font-weight:600}}
+main{{max-width:1120px;margin:auto;padding:32px 24px 48px;display:grid;gap:20px}}
+section{{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:20px;display:grid;gap:16px;min-width:0}}
+h2{{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0;font-weight:600}}
+h3{{font-size:15px;color:var(--text);margin:0 0 8px;font-weight:600}} h3.sub{{font-size:13px;color:var(--muted);margin:8px 0 0}}
 .kpis{{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}}
-.kpi,.chart,.action,.tablewrap{{background:var(--surface);border:1px solid var(--line);border-radius:8px}}
-.kpi{{padding:18px 20px}} .label{{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}} .value{{font-size:28px;font-weight:700;margin-top:4px;letter-spacing:-.01em}} .value small{{font-size:12px;color:var(--muted);font-weight:500;margin-left:6px}}
-.chart{{padding:6px;min-width:0;overflow:hidden}} .chart .plotly-graph-div{{width:100%!important}} .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(460px,100%),1fr));gap:12px}}
-.vintage-picker{{display:flex;align-items:center;gap:10px;margin:18px 0 8px}}
+.kpi{{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:16px}} .label{{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}} .value{{font-size:26px;font-weight:600;margin-top:4px;letter-spacing:-.01em}} .value small{{font-size:12px;color:var(--muted);font-weight:400;margin-left:6px}}
+.legend{{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px 16px;font-size:12px;color:var(--muted)}} .legend i{{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}}
+.chart{{min-width:0;overflow:hidden}} .chart .plotly-graph-div{{width:100%!important}} .grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}}
+.vintage-picker{{display:flex;align-items:center;gap:10px}}
 .vintage-picker label{{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}}
 .vintage-picker select{{background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:13px}}
-.action{{padding:22px;border-left:3px solid var(--accent);display:grid;grid-template-columns:1fr auto;gap:20px;align-items:center;margin-bottom:12px}}
+.action{{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:20px;border-left:3px solid var(--accent);display:grid;grid-template-columns:1fr auto;gap:20px;align-items:center}}
 .action.critical{{border-left-color:var(--bad)}} .action.warning{{border-left-color:var(--warn)}} .action.healthy{{border-left-color:var(--good)}}
-.action h3{{margin:0 0 5px;font-size:19px;color:var(--text);font-weight:700}} .action p{{margin:0;color:var(--muted);font-size:13px}}
-.delta{{font-size:26px;font-weight:700;text-align:right}} .delta small{{display:block;font-size:11px;color:var(--muted);font-weight:500}}
-.tablewrap{{overflow-x:auto;margin-top:10px}} table{{width:100%;border-collapse:collapse;font-size:13.5px}}
-th{{text-align:left;color:var(--muted);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:10px 14px;border-bottom:1px solid var(--line)}}
-td{{padding:9px 14px;border-bottom:1px solid var(--surface2);white-space:nowrap}} tr:last-child td{{border-bottom:0}} tr:hover td{{background:var(--surface2)}}
-td:first-child{{color:var(--text);font-weight:600}}
+.action h3{{margin:0 0 4px;font-size:18px}} .action p{{margin:0;color:var(--muted);font-size:13px}}
+.delta{{font-size:24px;font-weight:600;text-align:right}} .delta small{{display:block;font-size:11px;color:var(--muted);font-weight:400}}
+.tablewrap{{overflow:auto;max-height:360px;border:1px solid var(--line);border-radius:8px}} table{{width:100%;border-collapse:collapse;font-size:13px}}
+th{{position:sticky;top:0;z-index:1;background:var(--surface);text-align:left;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:10px 14px;border-bottom:1px solid var(--line)}}
+td{{padding:8px 14px;border-bottom:1px solid var(--line);white-space:nowrap}} tr:last-child td{{border-bottom:0}}
+tbody tr:nth-child(even) td{{background:rgba(127,168,236,.05)}} tbody tr:hover td{{background:rgba(127,168,236,.14)}}
 .badge{{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600}}
-.badge.healthy{{background:rgba(87,242,135,.14);color:var(--good)}} .badge.warning{{background:rgba(254,231,92,.14);color:var(--warn)}}
-.badge.critical{{background:rgba(237,66,69,.16);color:var(--bad)}} .badge.neutral{{background:rgba(148,155,164,.15);color:var(--muted)}}
+.badge.healthy{{background:{GOOD_BG};color:#1F6B47}} .badge.warning{{background:{WARN_BG};color:#8A5A0B}}
+.badge.critical{{background:{BAD_BG};color:#9C3524}} .badge.neutral{{background:var(--surface2);color:var(--muted)}}
 .pos{{color:var(--good)}} .neg{{color:var(--bad)}} .na{{color:var(--muted)}}
-.meta{{color:var(--muted);font-size:12px;margin-top:10px}} footer{{color:#6d6f78;border-top:1px solid var(--line);padding-top:18px;font-size:12px}}
-@media(max-width:760px){{nav{{height:auto;flex-wrap:wrap;padding-top:12px;padding-bottom:12px}}.grid{{grid-template-columns:1fr}}.action{{grid-template-columns:1fr}}.delta{{text-align:left}}}}
+.meta{{color:var(--muted);font-size:12px}} footer{{color:var(--muted);border-top:1px solid var(--line);padding-top:16px;font-size:12px}}
+@media(max-width:1000px){{.grid{{grid-template-columns:1fr}}}}
+@media(max-width:760px){{nav{{height:auto;flex-wrap:wrap;padding-top:12px;padding-bottom:12px}}.action{{grid-template-columns:1fr}}.delta{{text-align:left}}}}
 """
 
 
@@ -473,27 +511,31 @@ def render_report(frame: pd.DataFrame, report_month: str) -> str:
 </section>
 
 <section id="monthly"><h2>Monthly performance · overall</h2>
-<div class="chart">{figure_html(trajectory_chart(overall_monthly, 'Overall AUC trajectory · OOT-valid → monthly'))}</div>
+{chart_card('Is the score still ranking risk as well as at development?', trajectory_chart(overall_monthly))}
 <div class="tablewrap">{table_html(overall_monthly, MONTHLY_LABELS)}</div>
 </section>
 
 <section id="product"><h2>Monthly performance · by product</h2>
-<div class="chart">{figure_html(trajectory_chart(product_monthly, 'AUC trajectory by product', 'product_type'))}</div>
-<div class="chart">{figure_html(segment_rate_chart(product_monthly, 'product_type', 'Population mix & event rate by product'))}</div>
+{pair(
+    chart_card('How well does the score rank risk for each product?', trajectory_chart(product_monthly, 'product_type'), legend=True),
+    chart_card('Product mix (bars) and event rate (lines) by month', segment_rate_chart(product_monthly, 'product_type'), legend=True),
+)}
 <div class="tablewrap">{table_html(product_status, STATUS_LABELS)}</div>
 </section>
 
 <section id="model"><h2>Monthly performance · by model</h2>
-<div class="chart">{figure_html(trajectory_chart(model_monthly, 'AUC trajectory by model', 'model_type'))}</div>
-<div class="chart">{figure_html(segment_rate_chart(model_monthly, 'model_type', 'Population mix & event rate by model'))}</div>
+{pair(
+    chart_card('How well does the score rank risk for each model?', trajectory_chart(model_monthly, 'model_type'), legend=True),
+    chart_card('Model mix (bars) and event rate (lines) by month', segment_rate_chart(model_monthly, 'model_type'), legend=True),
+)}
 <div class="tablewrap">{table_html(model_status, STATUS_LABELS)}</div>
 </section>
 
 <section id="grades"><h2>Grade population &amp; event rate</h2>
-<div class="chart">{figure_html(grade_chart(grade_metrics(frame), 'Overall'))}</div>
-<h3>By product</h3>{grade_grid(frame, 'product_type')}
-<h3>By model</h3>{grade_grid(frame, 'model_type')}
-<h3>Vintage matrix</h3>
+{chart_card('Share of population and event rate by score grade', grade_chart(grade_metrics(frame)))}
+<h3 class="sub">By product</h3>{grade_grid(frame, 'product_type')}
+<h3 class="sub">By model</h3>{grade_grid(frame, 'model_type')}
+<h3 class="sub">Event rate by score bin and base month</h3>
 {vintage_section(frame)}
 </section>
 
