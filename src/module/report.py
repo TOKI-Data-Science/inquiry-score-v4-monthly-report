@@ -25,6 +25,12 @@ OOT_AUC = {
         'no_ndsh_lease': 0.680,
     },
 }
+# OOT-valid grade profile from model development: bin -> (population share, event rate)
+OOT_GRADE = {
+    '1': (0.023, 0.036), '2': (0.045, 0.065), '3': (0.051, 0.071), '4': (0.097, 0.118), '5': (0.146, 0.157),
+    '6': (0.149, 0.175), '7': (0.169, 0.223), '8': (0.163, 0.270), '9': (0.086, 0.327), '10': (0.072, 0.441),
+}
+GRADE_SHIFT_ALERT_PP = 5.0
 WARNING_DROP = 0.05
 CRITICAL_DROP = 0.10
 REQUIRED_COLUMNS = {'id', 'product_type', 'model_type', 'v4_score', 'v4_bin', 'base_month', 'event'}
@@ -225,6 +231,76 @@ def grade_chart(grade: pd.DataFrame, color: str = PALETTE[0]) -> go.Figure:
         bargap=0.5,
     )
     return fig
+
+
+def grade_compare_frame(grade: pd.DataFrame) -> pd.DataFrame:
+    """OOT-valid vs current share and event rate per bin (bins ordered numerically where possible)."""
+    cur = grade.set_index('v4_bin')
+    bins = sorted(set(OOT_GRADE) | set(cur.index), key=lambda b: (pd.to_numeric(b, errors='coerce'), b))
+    out = pd.DataFrame({'bin': bins})
+    out['oot_share'] = [OOT_GRADE.get(b, (np.nan, np.nan))[0] for b in bins]
+    out['oot_rate'] = [OOT_GRADE.get(b, (np.nan, np.nan))[1] for b in bins]
+    out['cur_share'] = [cur['share'].get(b, np.nan) for b in bins]
+    out['cur_rate'] = [cur['event_rate'].get(b, np.nan) for b in bins]
+    return out
+
+
+def _shift_labels(fig: go.Figure, bins, cur, oot) -> None:
+    """Current-minus-OOT label (percentage points) above each bin; red past the alert threshold."""
+    for b, c, o in zip(bins, cur, oot):
+        if pd.isna(c) or pd.isna(o):
+            continue
+        pp = (c - o) * 100
+        fig.add_annotation(
+            x=b, y=max(c, o), yref='y', text=f'{pp:+.1f}'.replace('-', '−'), showarrow=False, yshift=12,
+            font=dict(size=11, color=BAD if abs(pp) > GRADE_SHIFT_ALERT_PP else MUTED),
+        )
+
+
+def grade_share_compare_chart(cmp: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    fig.add_bar(x=cmp['bin'], y=cmp['oot_share'], name='OOT', marker_color=PALETTE[5], marker_line_width=0, opacity=0.6,
+                hovertemplate='Bin %{x}<br>OOT share %{y:.1%}<extra></extra>')
+    fig.add_bar(x=cmp['bin'], y=cmp['cur_share'], name='Current', marker_color=PALETTE[1], marker_line_width=0,
+                hovertemplate='Bin %{x}<br>Current share %{y:.1%}<extra></extra>')
+    base_layout(fig, height=360)
+    fig.update_layout(
+        barmode='group', bargap=0.25, bargroupgap=0.05,
+        xaxis=dict(type='category', categoryorder='array', categoryarray=cmp['bin'].tolist(), title=dict(text='Grade', font=AXIS_TITLE)),
+        yaxis=dict(title=dict(text='Population share', font=AXIS_TITLE), tickformat='.0%', range=[0, float(np.nanmax(cmp[['oot_share', 'cur_share']].to_numpy())) * 1.2]),
+    )
+    _shift_labels(fig, cmp['bin'], cmp['cur_share'], cmp['oot_share'])
+    return fig
+
+
+def grade_rate_compare_chart(cmp: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    for name, col, color in (('OOT', 'oot_rate', WARN), ('Current', 'cur_rate', PALETTE[1])):
+        fig.add_scatter(
+            x=cmp['bin'], y=cmp[col], name=name, mode='lines+markers',
+            line=dict(color=color, width=2.5), marker=dict(size=7, color=color),
+            hovertemplate='Bin %{x}<br>' + name + ' event rate %{y:.2%}<extra></extra>',
+        )
+    base_layout(fig, height=360)
+    fig.update_layout(
+        xaxis=dict(type='category', categoryorder='array', categoryarray=cmp['bin'].tolist(), title=dict(text='Grade', font=AXIS_TITLE)),
+        yaxis=dict(title=dict(text='Event rate', font=AXIS_TITLE), tickformat='.0%', range=[0, float(np.nanmax(cmp[['oot_rate', 'cur_rate']].to_numpy())) * 1.2]),
+    )
+    _shift_labels(fig, cmp['bin'], cmp['cur_rate'], cmp['oot_rate'])
+    return fig
+
+
+def grade_compare_section(frame: pd.DataFrame) -> str:
+    cmp = grade_compare_frame(grade_metrics(frame))
+    return f"""<section id="grade-dist"><h2>Grade distribution · OOT-valid vs overall</h2>
+{pair(
+    chart_card('Is the share of users in each grade still what it was at development?', grade_share_compare_chart(cmp), legend=True),
+    chart_card('Is the event rate in each grade still what it was at development?', grade_rate_compare_chart(cmp), legend=True),
+)}
+<div class="meta">Numbers above each grade are current minus OOT in percentage points; red when the change is more than {GRADE_SHIFT_ALERT_PP:.0f}pp.</div>
+</section>
+
+"""
 
 
 def figure_html(fig: go.Figure) -> str:
@@ -531,7 +607,7 @@ def render_report(frame: pd.DataFrame, report_month: str) -> str:
 <div class="tablewrap">{table_html(model_status, STATUS_LABELS)}</div>
 </section>
 
-<section id="grades"><h2>Grade population &amp; event rate</h2>
+{grade_compare_section(frame)}<section id="grades"><h2>Grade population &amp; event rate</h2>
 {chart_card('Share of population and event rate by score grade', grade_chart(grade_metrics(frame)))}
 <h3 class="sub">By product</h3>{grade_grid(frame, 'product_type')}
 <h3 class="sub">By model</h3>{grade_grid(frame, 'model_type')}
